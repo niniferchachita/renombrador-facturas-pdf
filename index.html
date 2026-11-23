@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Renombrador de Facturas PDF - Ordenado por N° de Unidad (1 al N)</title>
+    <!-- Motores Web: PDF.js (lectura visual), Tesseract.js (OCR escaneados) y JSZip -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --success: #16a34a;
+            --success-dark: #15803d;
+            --info: #0284c7;
+            --danger: #dc2626;
+            --bg: #eef2f6;
+            --card: #ffffff;
+            --border: #cbd5e1;
+            --text: #1e293b;
+        }
+        * { box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
+        body { background: var(--bg); color: var(--text); margin: 0; padding: 14px; }
+        
+        .layout {
+            max-width: 1320px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 390px 1fr;
+            gap: 14px;
+            min-height: calc(100vh - 28px);
+        }
+        @media (max-width: 960px) { .layout { grid-template-columns: 1fr; } }
+
+        .panel {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+        }
+        .panel-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #0f172a;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 8px;
+            margin: 0 0 10px 0;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1.1fr auto;
+            gap: 6px;
+            align-items: end;
+            margin-bottom: 8px;
+        }
+        label { display: block; font-size: 0.78rem; font-weight: 600; color: #475569; margin-bottom: 2px; }
+        input[type="text"] {
+            width: 100%;
+            padding: 7px 9px;
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            font-size: 0.9rem;
+        }
+        input[type="text"]:focus { outline: none; border-color: var(--primary); }
+
+        button {
+            border: none;
+            border-radius: 5px;
+            padding: 7px 12px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            color: white;
+            background: var(--primary);
+            transition: opacity 0.15s;
+            white-space: nowrap;
+        }
+        button:hover:not(:disabled) { opacity: 0.9; }
+        button:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn-success { background: var(--success); }
+        .btn-info { background: var(--info); }
+        .btn-danger { background: var(--danger); }
+        .btn-sec { background: #f8fafc; color: #334155; border: 1px solid var(--border); }
+        .btn-sec:hover:not(:disabled) { background: #e2e8f0; }
+
+        .btn-row { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+        .btn-row > button { flex: 1; }
+
+        .table-box {
+            flex: 1;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            max-height: 460px;
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+        th {
+            background: #f1f5f9;
+            position: sticky;
+            top: 0;
+            padding: 8px;
+            text-align: center;
+            font-weight: 700;
+            border-bottom: 1px solid var(--border);
+            z-index: 1;
+        }
+        td {
+            padding: 6px 8px;
+            border-bottom: 1px solid #e2e8f0;
+            text-align: center;
+        }
+        tbody tr { cursor: pointer; }
+        tbody tr:hover { filter: brightness(0.96); }
+        tr.selected { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+        .row-ok { background: #dcfce7; color: #166534; }
+        .row-warn { background: #fef3c7; color: #92400e; }
+        .row-err { background: #fee2e2; color: #991b1b; }
+
+        .footer-info { font-size: 0.8rem; color: #475569; margin-top: 8px; }
+        .status-bar { font-size: 0.88rem; font-weight: 700; color: #0f172a; margin: 6px 0 8px 0; }
+        .opt-line {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.83rem;
+            margin-bottom: 6px;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        /* Modal para Ver Texto Leído */
+        .modal-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.55);
+            z-index: 50;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .modal-card {
+            background: white;
+            width: 100%;
+            max-width: 680px;
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+        .modal-card pre {
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            padding: 12px;
+            border-radius: 6px;
+            max-height: 360px;
+            overflow: auto;
+            font-family: Consolas, monospace;
+            font-size: 0.83rem;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+
+<div class="layout">
+    <!-- PANEL 1: BASE DE DATOS -->
+    <div class="panel">
+        <h2 class="panel-title">1. Base de Datos (Ordenada del 1 al último)</h2>
+
+        <div class="form-grid">
+            <div>
+                <label for="inputUnidad">N° Unidad (Ej: 7):</label>
+                <input type="text" id="inputUnidad" placeholder="7">
+            </div>
+            <div>
+                <label for="inputPlaca">Placa (Ej: AAY0045):</label>
+                <input type="text" id="inputPlaca" placeholder="AAY0045">
+            </div>
+            <button onclick="guardarRegistro()">Guardar</button>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn-sec" onclick="document.getElementById('csvInput').click()">📥 Importar / Reemplazar CSV</button>
+            <button class="btn-sec" onclick="exportarCSV()">📤 Exportar CSV</button>
+            <input type="file" id="csvInput" accept=".csv,.txt" style="display:none" onchange="importarCSV(this)">
+        </div>
+
+        <div class="btn-row">
+            <button class="btn-sec" onclick="eliminarSeleccionadoBD()">Eliminar Fila</button>
+            <button class="btn-sec" onclick="invertirColumnasBD()">🔄 Invertir Col.</button>
+            <button class="btn-danger" onclick="vaciarTodaBD()">🗑️ Vaciar BD</button>
+        </div>
+
+        <div class="table-box">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 45%;">N° Unidad ▲</th>
+                        <th style="width: 55%;">Placa</th>
+                    </tr>
+                </thead>
+                <tbody id="tbodyBD"></tbody>
+            </table>
+        </div>
+
+        <div class="footer-info" id="lblTotalBD">0 unidades registradas</div>
+    </div>
+
+    <!-- PANEL 2: RENOMBRADOR DE PDFs -->
+    <div class="panel">
+        <h2 class="panel-title">2. Renombrar Facturas PDF (Busca 'PLACA:' → Unidad + Placa)</h2>
+
+        <div class="btn-row" style="margin-bottom: 8px;">
+            <button class="btn-success" onclick="document.getElementById('folderInput').click()">📂 Seleccionar Carpeta y Renombrar</button>
+            <button class="btn-info" onclick="document.getElementById('filesInput').click()">📄 Elegir PDFs</button>
+            <button class="btn-sec" onclick="verTextoLeido()">🔍 Ver Texto Leído</button>
+            <button id="btnDescargarZip" onclick="descargarTodoZip()" disabled>📦 Descargar Todos (.ZIP)</button>
+
+            <input type="file" id="folderInput" webkitdirectory directory multiple style="display:none" onchange="procesarArchivos(this.files)">
+            <input type="file" id="filesInput" accept=".pdf" multiple style="display:none" onchange="procesarArchivos(this.files)">
+        </div>
+
+        <div class="opt-line">
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:normal; color:#1e293b;">
+                <input type="checkbox" id="chkCeros">
+                Rellenar ceros a la izquierda en el archivo (ej. 007_AAY0045.pdf en vez de 7_AAY0045.pdf)
+            </label>
+            <span style="color:#0284c7; font-weight:700;">Motor: Visual + OCR Web</span>
+        </div>
+
+        <div class="status-bar" id="lblEstado">Selecciona una carpeta o archivos PDF. Se ordenarán del N° 1 hasta el último.</div>
+
+        <div class="table-box" style="max-height: 490px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 85px;">N° Unidad ▲</th>
+                        <th style="width: 105px;">Placa en PDF</th>
+                        <th>Nombre Final (Unidad + Placa)</th>
+                        <th>Archivo Original</th>
+                        <th style="width: 155px;">Estado</th>
+                        <th style="width: 65px;">Bajar</th>
+                    </tr>
+                </thead>
+                <tbody id="tbodyRes"></tbody>
+            </table>
+        </div>
+
+        <div class="footer-info">Tip: Haz clic en una fila y pulsa "Ver Texto Leído" para depurar, doble clic abre el PDF, o descarga todos juntos en .ZIP.</div>
+    </div>
+</div>
+
+<!-- MODAL DE TEXTO EXTRAÍDO -->
+<div class="modal-backdrop" id="modalTexto" onclick="if(event.target===this) cerrarModal()">
+    <div class="modal-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <strong id="modalTitulo">Texto detectado dentro del PDF</strong>
+            <button class="btn-danger" style="padding:4px 10px;" onclick="cerrarModal()">Cerrar</button>
+        </div>
+        <pre id="modalContenido"></pre>
+    </div>
+</div>
+
+<script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const STORAGE_KEY = 'renombrador_unidades_bd_v1';
+    let baseDatos = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+    let bdFilaSeleccionada = null;
+    let resultadosActuales = [];
+    let resFilaSeleccionada = null;
+    let ocrWorker = null;
+
+    // --- FUNCIONES DE NORMALIZACIÓN Y ORDENAMIENTO ---
+    function normalizarPlaca(texto) {
+        return String(texto || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    }
+
+    function corregirOcrPlaca(placaNorm) {
+        const m = placaNorm.match(/^([A-Z0-9]{2,3})(\d[A-Z0-9]{2,3})$/);
+        if (!m) return placaNorm;
+        const mapLetra = { '0': 'O', '1': 'I', '2': 'Z', '5': 'S', '8': 'B' };
+        const mapNum = { 'O': '0', 'Q': '0', 'D': '0', 'I': '1', 'L': '1', 'Z': '2', 'S': '5', 'B': '8' };
+        const letras = m[1].replace(/[01258]/g, c => mapLetra[c] || c);
+        const nums = m[2].replace(/[OQDILZSB]/g, c => mapNum[c] || c);
+        return letras + nums;
+    }
+
+    function esFormatoPlaca(texto) {
+        const limpio = normalizarPlaca(texto);
+        return /^[A-Z]{2,3}\d{3,4}[A-Z0-9]?$/.test(limpio);
+    }
+
+    function limpiarNombreArchivo(nombre) {
+        return String(nombre || '').replace(/[\\/*?:"<>|]/g, '-').trim();
+    }
+
+    function extraerNumeroUnidad(unidadTexto) {
+        const str = String(unidadTexto || '').trim();
+        const match = str.match(/\d+/);
+        if (match) return [0, parseInt(match[0], 10), str.toLowerCase()];
+        return [1, 999999999, str.toLowerCase()];
+    }
+
+    function compararUnidades(uA, uB) {
+        const a = extraerNumeroUnidad(uA);
+        const b = extraerNumeroUnidad(uB);
+        if (a[0] !== b[0]) return a[0] - b[0];
+        if (a[1] !== b[1]) return a[1] - b[1];
+        return a[2].localeCompare(b[2]);
+    }
+
+    // --- GESTIÓN DE BASE DE DATOS ---
+    function repararInversionBD() {
+        let corregido = false;
+        const nuevaBD = {};
+        for (const [k, item] of Object.entries(baseDatos)) {
+            if (esFormatoPlaca(item.unidad) && !esFormatoPlaca(item.placa)) {
+                const pReal = String(item.unidad).trim().toUpperCase();
+                const uReal = String(item.placa).trim();
+                nuevaBD[normalizarPlaca(pReal)] = { placa: pReal, unidad: uReal };
+                corregido = true;
+            } else {
+                nuevaBD[k] = item;
+            }
+        }
+        if (corregido) {
+            baseDatos = nuevaBD;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(baseDatos));
+        }
+    }
+
+    function guardarYRenderizarBD() {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(baseDatos));
+        const tbody = document.getElementById('tbodyBD');
+        tbody.innerHTML = '';
+
+        const lista = Object.entries(baseDatos).map(([clave, val]) => ({
+            clave,
+            unidad: val.unidad,
+            placa: val.placa
+        }));
+
+        // Ordenar estrictamente del 1 hasta el último
+        lista.sort((a, b) => compararUnidades(a.unidad, b.unidad));
+
+        lista.forEach(item => {
+            const tr = document.createElement('tr');
+            if (bdFilaSeleccionada === item.clave) tr.classList.add('selected');
+            tr.innerHTML = `<td><strong>${item.unidad}</strong></td><td>${item.placa}</td>`;
+            tr.onclick = () => {
+                bdFilaSeleccionada = item.clave;
+                document.getElementById('inputUnidad').value = item.unidad;
+                document.getElementById('inputPlaca').value = item.placa;
+                guardarYRenderizarBD();
+            };
+            tbody.appendChild(tr);
+        });
+
+        const lbl = document.getElementById('lblTotalBD');
+        if (lista.length > 0) {
+            lbl.textContent = `${lista.length} unidades (Orden: ${lista[0].unidad} hasta ${lista[lista.length - 1].unidad})`;
+        } else {
+            lbl.textContent = '0 unidades registradas';
+        }
+    }
+
+    function guardarRegistro() {
+        let unidad = document.getElementById('inputUnidad').value.trim();
+        let placa = document.getElementById('inputPlaca').value.trim().toUpperCase();
+
+        if (!unidad || !placa) {
+            alert('Ingresa tanto el número de unidad como la placa.');
+            return;
+        }
+        if (esFormatoPlaca(unidad) && !esFormatoPlaca(placa)) {
+            [unidad, placa] = [placa, unidad.toUpperCase()];
+        }
+
+        baseDatos[normalizarPlaca(placa)] = { unidad, placa };
+        bdFilaSeleccionada = null;
+        document.getElementById('inputUnidad').value = '';
+        document.getElementById('inputPlaca').value = '';
+        document.getElementById('inputUnidad').focus();
+        guardarYRenderizarBD();
+    }
+
+    function eliminarSeleccionadoBD() {
+        if (!bdFilaSeleccionada || !baseDatos[bdFilaSeleccionada]) {
+            alert('Haz clic sobre una fila de la Base de Datos para eliminarla.');
+            return;
+        }
+        delete baseDatos[bdFilaSeleccionada];
+        bdFilaSeleccionada = null;
+        guardarYRenderizarBD();
+    }
+
+    function invertirColumnasBD() {
+        const nueva = {};
+        for (const item of Object.values(baseDatos)) {
+            const pReal = String(item.unidad).trim().toUpperCase();
+            const uReal = String(item.placa).trim();
+            nueva[normalizarPlaca(pReal)] = { placa: pReal, unidad: uReal };
+        }
+        baseDatos = nueva;
+        guardarYRenderizarBD();
+    }
+
+    function vaciarTodaBD() {
+        if (!confirm('¿Estás seguro de ELIMINAR TODA la base de datos?')) return;
+        baseDatos = {};
+        bdFilaSeleccionada = null;
+        guardarYRenderizarBD();
+    }
+
+    function importarCSV(input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        const reemplazar = confirm(
+            '¿Deseas BORRAR la base de datos anterior y dejar solo este archivo?\n\n' +
+            '• Aceptar = Borra todo lo anterior y carga solo lo nuevo.\n' +
+            '• Cancelar = Mantiene lo actual, actualiza repetidos y agrega nuevos.'
+        );
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            if (reemplazar) baseDatos = {};
+            const texto = e.target.result;
+            const lineas = texto.split(/\r?\n/);
+            let agregados = 0;
+
+            lineas.forEach(linea => {
+                const partes = linea.split(/[\t,;]+/).map(p => p.trim());
+                if (partes.length >= 2 && partes[0] && partes[1]) {
+                    const c1 = partes[0];
+                    const c2 = partes[1];
+                    if (['PLACA', 'UNIDAD', 'N° UNIDAD', 'NUMERO DE UNIDAD', 'N°', 'NUM'].includes(c1.toUpperCase())) return;
+
+                    let uRaw, pRaw;
+                    if (esFormatoPlaca(c1) && !esFormatoPlaca(c2)) {
+                        pRaw = c1.toUpperCase(); uRaw = c2;
+                    } else if (esFormatoPlaca(c2) && !esFormatoPlaca(c1)) {
+                        uRaw = c1; pRaw = c2.toUpperCase();
+                    } else {
+                        uRaw = c1; pRaw = c2.toUpperCase();
+                    }
+                    baseDatos[normalizarPlaca(pRaw)] = { unidad: uRaw, placa: pRaw };
+                    agregados++;
+                }
+            });
+
+            input.value = '';
+            guardarYRenderizarBD();
+            alert(`Base de datos ${reemplazar ? 'reemplazada' : 'actualizada'} con ${agregados} registros.`);
+        };
+        reader.readAsText(file, 'UTF-8');
+    }
+
+    function exportarCSV() {
+        const lista = Object.values(baseDatos);
+        if (!lista.length) {
+            alert('No hay registros para exportar.');
+            return;
+        }
+        lista.sort((a, b) => compararUnidades(a.unidad, b.unidad));
+
+        let csv = '\uFEFFunidad;placa\n';
+        lista.forEach(r => { csv += `${r.unidad};${r.placa}\n`; });
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'base_datos_unidades.csv';
+        link.click();
+    }
+
+    // --- EXTRACCIÓN VISUAL (PDF.JS) + OCR (TESSERACT.JS) ---
+    function reconstruirLineasVisuales(itemsXY, toleranciaY = 6) {
+        if (!itemsXY.length) return '';
+        // En PDF, Y crece hacia arriba; ordenamos de arriba hacia abajo (b.y - a.y)
+        itemsXY.sort((a, b) => (b.y - a.y) || (a.x - b.x));
+        const lineas = [];
+        let actual = [];
+        let yRef = null;
+
+        for (const it of itemsXY) {
+            if (yRef === null || Math.abs(it.y - yRef) <= toleranciaY) {
+                actual.push(it);
+                if (yRef === null) yRef = it.y;
+            } else {
+                actual.sort((a, b) => a.x - b.x);
+                lineas.push(actual.map(i => i.text).join(' '));
+                actual = [it];
+                yRef = it.y;
+            }
+        }
+        if (actual.length) {
+            actual.sort((a, b) => a.x - b.x);
+            lineas.push(actual.map(i => i.text).join(' '));
+        }
+        return lineas.join('\n');
+    }
+
+    async function extraerTextoVisualPDF(pdfDoc) {
+        let textoTotal = [];
+        for (let i = 1; i <= pdfDoc.numPages; i++) {
+            const page = await pdfDoc.getPage(i);
+            const content = await page.getTextContent();
+            const itemsXY = content.items
+                .filter(it => it.str && it.str.trim())
+                .map(it => ({
+                    x: it.transform[4],
+                    y: it.transform[5],
+                    text: it.str
+                }));
+            textoTotal.push(reconstruirLineasVisuales(itemsXY, 6));
+        }
+        return textoTotal.join('\n');
+    }
+
+    async function extraerTextoOcrPDF(pdfDoc) {
+        if (!ocrWorker) {
+            ocrWorker = await Tesseract.createWorker('eng');
+        }
+        let textoOcrTotal = [];
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        for (let i = 1; i <= pdfDoc.numPages; i++) {
+            const page = await pdfDoc.getPage(i);
+            const viewport = page.getViewport({ scale: 2.2 });
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            await page.render({ canvasContext: ctx, viewport }).promise;
+
+            const { data } = await ocrWorker.recognize(canvas);
+            if (data && data.text) {
+                textoOcrTotal.push(data.text);
+            }
+        }
+        return textoOcrTotal.join('\n');
+    }
+
+    function analizarYBuscarPlaca(textoUpper) {
+        const limpio = textoUpper.replace(/\bP\s+L\s+A\s+C\s+A\b/g, 'PLACA');
+
+        const patrones = [
+            /PLACA\s*[:;.\-]?\s*([A-Z]{2,3}[-\s]?\d{3,4}[A-Z0-9]?)\b/,
+            /PLACA\s*[:;.\-]?\s*([A-Z0-9]{2,3}\s*[-]\s*[A-Z0-9]{3,4})/,
+            /PLACA[^\n]{0,35}?\b([A-Z]{2,3}[-\s]?\d{3,4})\b/
+        ];
+
+        for (const pat of patrones) {
+            const m = limpio.match(pat);
+            if (m) {
+                const cand = m[1].replace(/\s+/g, '').replace(/^-|-$/g, '');
+                if (/\d/.test(cand) && /[A-Z]/.test(cand)) return cand;
+            }
+        }
+
+        // Respaldo: buscar directamente cualquier placa registrada en la Base de Datos
+        const clavesOrdenadas = Object.keys(baseDatos).sort((a, b) => b.length - a.length);
+        for (const pNorm of clavesOrdenadas) {
+            if (!pNorm) continue;
+            const esc = pNorm.split('').map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[-\\s]*');
+            const regexBD = new RegExp(`(?<![A-Z0-9])${esc}(?![A-Z0-9])`);
+            const mBd = limpio.match(regexBD);
+            if (mBd) return mBd[0].replace(/\s+/g, '');
+        }
+
+        return null;
+    }
+
+    // --- PROCESAMIENTO DE ARCHIVOS ---
+    async function procesarArchivos(fileList) {
+        const pdfFiles = Array.from(fileList).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+        if (!pdfFiles.length) {
+            alert('No se encontraron archivos PDF en la selección.');
+            return;
+        }
+        if (!Object.keys(baseDatos).length) {
+            alert('Primero registra al menos una unidad y placa en el panel izquierdo.');
+            return;
+        }
+
+        resultadosActuales = [];
+        resFilaSeleccionada = null;
+        document.getElementById('btnDescargarZip').disabled = true;
+        const lblEstado = document.getElementById('lblEstado');
+
+        const rellenarCeros = document.getElementById('chkCeros').checked;
+        const numsBD = Object.values(baseDatos)
+            .map(v => extraerNumeroUnidad(v.unidad))
+            .filter(x => x[0] === 0)
+            .map(x => x[1]);
+        const maxNum = numsBD.length ? Math.max(...numsBD) : 1;
+        const anchoDigitos = Math.max(2, String(maxNum).length);
+
+        const nombresUsados = new Set();
+
+        for (let i = 0; i < pdfFiles.length; i++) {
+            const file = pdfFiles[i];
+            lblEstado.textContent = `Analizando archivo ${i + 1} de ${pdfFiles.length}: ${file.name}...`;
+
+            try {
+                const buffer = await file.arrayBuffer();
+                const pdfDoc = await pdfjsLib.getDocument({ data: buffer.slice(0) }).promise;
+
+                let textoExtraido = await extraerTextoVisualPDF(pdfDoc);
+                let placaEnPdf = textoExtraido.trim() ? analizarYBuscarPlaca(textoExtraido.toUpperCase()) : null;
+
+                // Si no halló placa (PDF escaneado), aplicar OCR automático
+                if (!placaEnPdf) {
+                    lblEstado.textContent = `Aplicando OCR escáner (${i + 1}/${pdfFiles.length}): ${file.name}...`;
+                    const textoOcr = await extraerTextoOcrPDF(pdfDoc);
+                    if (textoOcr.trim()) {
+                        textoExtraido = `[LEÍDO POR OCR ESCÁNER]\n${textoOcr}`;
+                        placaEnPdf = analizarYBuscarPlaca(textoOcr.toUpperCase());
+                    }
+                }
+
+                if (!textoExtraido.trim()) {
+                    resultadosActuales.push({
+                        id: i, matched: false, unidad: '-', placa: '-',
+                        nuevoNombre: '-', original: file.name,
+                        estado: 'PDF vacío o ilegible', rowClass: 'row-err',
+                        texto: '(Sin texto)', buffer
+                    });
+                    continue;
+                }
+
+                if (!placaEnPdf) {
+                    resultadosActuales.push({
+                        id: i, matched: false, unidad: '-', placa: '-',
+                        nuevoNombre: '-', original: file.name,
+                        estado: 'No tiene campo PLACA:', rowClass: 'row-err',
+                        texto: textoExtraido, buffer
+                    });
+                    continue;
+                }
+
+                const claveNorm = normalizarPlaca(placaEnPdf);
+                const claveOcr = corregirOcrPlaca(claveNorm);
+                const reg = baseDatos[claveNorm] || baseDatos[claveOcr];
+
+                if (reg) {
+                    const uStr = String(reg.unidad);
+                    const uArchivo = (rellenarCeros && /^\d+$/.test(uStr)) ? uStr.padStart(anchoDigitos, '0') : uStr;
+                    let baseNombre = limpiarNombreArchivo(`${uArchivo}_${placaEnPdf}`);
+                    let nuevoNombre = `${baseNombre}.pdf`;
+                    let c = 1;
+                    while (nombresUsados.has(nuevoNombre)) {
+                        nuevoNombre = `${baseNombre}_${c}.pdf`;
+                        c++;
+                    }
+                    nombresUsados.add(nuevoNombre);
+
+                    resultadosActuales.push({
+                        id: i, matched: true, unidad: reg.unidad, placa: placaEnPdf,
+                        nuevoNombre, original: file.name,
+                        estado: 'Renombrado OK', rowClass: 'row-ok',
+                        texto: textoExtraido, buffer
+                    });
+                } else {
+                    resultadosActuales.push({
+                        id: i, matched: false, unidad: '-', placa: placaEnPdf,
+                        nuevoNombre: '-', original: file.name,
+                        estado: 'Placa no está en BD', rowClass: 'row-warn',
+                        texto: textoExtraido, buffer
+                    });
+                }
+            } catch (err) {
+                resultadosActuales.push({
+                    id: i, matched: false, unidad: '-', placa: '-',
+                    nuevoNombre: '-', original: file.name,
+                    estado: 'Error al leer PDF', rowClass: 'row-err',
+                    texto: String(err), buffer: null
+                });
+            }
+        }
+
+        // Ordenar resultados estrictamente del N° 1 hasta el último
+        resultadosActuales.sort((a, b) => {
+            if (a.matched && b.matched) return compararUnidades(a.unidad, b.unidad);
+            if (a.matched !== b.matched) return a.matched ? -1 : 1;
+            return a.original.localeCompare(b.original);
+        });
+
+        renderizarResultados();
+        const totalOk = resultadosActuales.filter(r => r.matched).length;
+        lblEstado.textContent = `Listo: ${totalOk} de ${pdfFiles.length} enlazados (ordenados del 1 al último).`;
+        document.getElementById('btnDescargarZip').disabled = totalOk === 0;
+    }
+
+    function renderizarResultados() {
+        const tbody = document.getElementById('tbodyRes');
+        tbody.innerHTML = '';
+
+        resultadosActuales.forEach((item, idx) => {
+            const tr = document.createElement('tr');
+            tr.className = item.rowClass;
+            if (resFilaSeleccionada === idx) tr.classList.add('selected');
+
+            tr.innerHTML = `
+                <td><strong>${item.unidad}</strong></td>
+                <td>${item.placa}</td>
+                <td><strong>${item.nuevoNombre}</strong></td>
+                <td title="${item.original}">${item.original}</td>
+                <td>${item.estado}</td>
+                <td>${item.matched ? `<button class="btn-success" style="padding:3px 8px; font-size:0.78rem;" onclick="event.stopPropagation(); descargarUno(${idx})">⬇</button>` : '-'}</td>
+            `;
+
+            tr.onclick = () => {
+                resFilaSeleccionada = idx;
+                renderizarResultados();
+            };
+
+            tr.ondblclick = () => {
+                if (!item.buffer) return;
+                const blob = new Blob([item.buffer], { type: 'application/pdf' });
+                window.open(URL.createObjectURL(blob), '_blank');
+            };
+
+            tbody.appendChild(tr);
+        });
+    }
+
+    function descargarUno(idx) {
+        const item = resultadosActuales[idx];
+        if (!item || !item.buffer) return;
+        const blob = new Blob([item.buffer], { type: 'application/pdf' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = item.nuevoNombre;
+        a.click();
+    }
+
+    async function descargarTodoZip() {
+        const exitosos = resultadosActuales.filter(r => r.matched && r.buffer);
+        if (!exitosos.length) return;
+
+        const zip = new JSZip();
+        exitosos.forEach(item => zip.file(item.nuevoNombre, item.buffer));
+
+        const contenido = await zip.generateAsync({ type: 'blob' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(contenido);
+        a.download = 'Facturas_Renombradas_Unidades.zip';
+        a.click();
+    }
+
+    function verTextoLeido() {
+        if (resFilaSeleccionada === null || !resultadosActuales[resFilaSeleccionada]) {
+            alert('Haz clic sobre una fila de la tabla derecha para ver el texto extraído de ese PDF.');
+            return;
+        }
+        const item = resultadosActuales[resFilaSeleccionada];
+        document.getElementById('modalTitulo').textContent = `Texto leído: ${item.original}`;
+        document.getElementById('modalContenido').textContent = item.texto || '(Sin texto detectado)';
+        document.getElementById('modalTexto').style.display = 'flex';
+    }
+
+    function cerrarModal() {
+        document.getElementById('modalTexto').style.display = 'none';
+    }
+
+    // Atajos Enter en inputs
+    document.getElementById('inputUnidad').addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('inputPlaca').focus();
+    });
+    document.getElementById('inputPlaca').addEventListener('keydown', e => {
+        if (e.key === 'Enter') guardarRegistro();
+    });
+
+    // Inicializar
+    repararInversionBD();
+    guardarYRenderizarBD();
+</script>
+
+</body>
+</html>
